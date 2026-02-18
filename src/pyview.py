@@ -10,11 +10,11 @@ import subprocess
 
 from dataclasses import dataclass, field
 from html.parser import HTMLParser
-from typing import List, Optional, Tuple
-from html import unescape
+from typing      import List, Optional, Tuple
+from html        import unescape
 
 from PyQt5.QtCore import (
-    Qt, QUrl, QModelIndex, QByteArray, QSortFilterProxyModel, QRect
+    Qt, QUrl, QModelIndex, QByteArray, QSortFilterProxyModel, QRect, QPoint
 )
 from PyQt5.QtGui import (
     QStandardItem, QStandardItemModel, QIcon, QPalette, QColor,
@@ -27,11 +27,6 @@ from PyQt5.QtWidgets import (
 )
 from PyQt5.QtWebEngineWidgets import QWebEngineView
 from PyQt5.QtSvg import QSvgRenderer
-
-
-# ----------------------------
-# SVG Icons (CHM-ish)
-# ----------------------------
 
 SVG_BOOK = r"""
 <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16">
@@ -73,7 +68,7 @@ class TocNode:
 
 class HtmlHelpParser(HTMLParser):
     """
-    Parser für Sphinx htmlhelp .hhc (Contents) und .hhk (Index).
+    Parser für htmlhelp .hhc (Contents) und .hhk (Index).
     Beide nutzen:
       <OBJECT type="text/sitemap">
          <param name="Name" value="...">
@@ -406,6 +401,8 @@ class MainWindow(QMainWindow):
         # Tabs left
         self.tabs = QTabWidget()
         self.tabs.setDocumentMode(True)
+        self.tabs.setUsesScrollButtons(True)
+        self.tabs.tabBar().setUsesScrollButtons(True)
 
         # Contents model/view
         self.contents_model = QStandardItemModel()
@@ -649,22 +646,46 @@ class MainWindow(QMainWindow):
 
         def walk(n: TocNode):
             if n.local:
-                items.append((n.title, n.local))
+                items.append((n.title.strip(), n.local.strip()))
             for c in n.children:
                 walk(c)
 
         for c in idx_root.children:
             walk(c)
 
-        items.sort(key=lambda x: x[0].lower())
+        # Dedup:
+        # 1) bevorzugt nach Local (Ziel) deduplizieren
+        # 2) falls Local leer/komisch wäre: nach (title, local)
+        seen_local = set()
+        seen_pair = set()
+        deduped: List[Tuple[str, str]] = []
 
         for title, local in items:
+            key_local = (local or "").lower()
+            key_pair = (title.lower(), key_local)
+
+            if key_local:
+                if key_local in seen_local:
+                    continue
+                seen_local.add(key_local)
+            else:
+                if key_pair in seen_pair:
+                    continue
+                seen_pair.add(key_pair)
+
+            deduped.append((title, local))
+
+        # sort by title
+        deduped.sort(key=lambda x: x[0].lower())
+
+        for title, local in deduped:
             it = QStandardItem(title)
             it.setEditable(False)
             it.setIcon(self.icon_page)
             it.setData(local, self.ROLE_LOCAL)
             it.setData(title, self.ROLE_BREAD)
             self.index_model.appendRow(it)
+
 
     def _node_to_item(self, node: TocNode, parent_path: List[str]) -> QStandardItem:
         item = QStandardItem(node.title)
@@ -757,16 +778,16 @@ class MainWindow(QMainWindow):
 
     def _set_cursor_for_edge(self, edge):
         pass
-        """if edge in ("L", "R"):
-            self.setCursor(Qt.SizeHorCursor)
-        elif edge in ("T", "B"):
-            self.setCursor(Qt.SizeVerCursor)
-        elif edge in ("LT", "RB"):
-            self.setCursor(Qt.SizeFDiagCursor)
-        elif edge in ("RT", "LB"):
-            self.setCursor(Qt.SizeBDiagCursor)
-        else:
-            self.setCursor(Qt.ArrowCursor)"""
+        #"""if edge in ("L", "R"):
+        #    self.setCursor(Qt.SizeHorCursor)
+        #elif edge in ("T", "B"):
+        #    self.setCursor(Qt.SizeVerCursor)
+        #elif edge in ("LT", "RB"):
+        #    self.setCursor(Qt.SizeFDiagCursor)
+        #elif edge in ("RT", "LB"):
+        #    self.setCursor(Qt.SizeBDiagCursor)
+        #else:
+        #    self.setCursor(Qt.ArrowCursor)"""
 
 
     def mouseMoveEvent(self, event):
@@ -862,7 +883,6 @@ class MainWindow(QMainWindow):
         self.web.setUrl(url)
 
     # -------- Search (Sphinx) --------
-
     def open_sphinx_search(self):
         if not self.base_dir:
             return
@@ -881,7 +901,6 @@ class MainWindow(QMainWindow):
         self.web.setUrl(url)
 
     # -------- Navigation --------
-
     def go_home(self):
         if not self.base_dir:
             return
@@ -890,17 +909,16 @@ class MainWindow(QMainWindow):
             self.web.setUrl(QUrl.fromLocalFile(home))
 
     # -------- Theme --------
-
     def toggle_theme(self):
         self.dark_mode = not self.dark_mode
         self.act_theme.setText("☀️ Light" if self.dark_mode else "🌙 Dark")
         self._apply_theme()
         self._inject_web_css()
-
+    
     def _apply_theme(self):
         app = QApplication.instance()
         pal = QPalette()
-
+        
         if self.dark_mode:
             pal.setColor(QPalette.Window, QColor(30, 30, 30))
             pal.setColor(QPalette.WindowText, Qt.white)
@@ -913,293 +931,147 @@ class MainWindow(QMainWindow):
             pal.setColor(QPalette.HighlightedText, Qt.white)
         else:
             pal = app.style().standardPalette()
-
+        
         app.setPalette(pal)
+        
+        if self.dark_mode:
+            header_bg               = "#222222"
+            header_fg               = "#ffd866"
+            tree_bg                 = "#181818"
+            tree_fg                 = "#ffffff"
+            sel_bg                  = "#2b4c7e"
+            sel_fg                  = "#ffffff"
+            border                  = "#333333"
+            
+            tab_bg                  = "#1c1c1c"
+            tab_bar_bg              = "#161616"
+            tab_fg                  = "#eaeaea"
+            tab_fg_active           = "#ffd866"
+            tab_sel_bg              = "#242424"
+            tab_hover_bg            = "#202020"
+            
+            toolbar_bg              = "#1a1a1a"
+            toolbtn_bg              = "#222222"
+            toolbtn_fg              = "#ffd866"
+            toolbtn_hover           = "#2a2a2a"
+            toolbtn_pressed         = "#303030"
+            
+            title_bg                = "#121212"  # Hintergrund Titelleiste
+            title_fg                = "#ffd866"  # Text/Farbe Buttons (oder "#ffffff")
+            title_btn_bg            = "#1f1f1f"  # Buttons normal
+            title_btn_hover         = "#2a2a2a"  # Buttons hover
+            title_btn_close_hover   = "#8a1f1f"  # Close hover
+            
+            status_bg               = "#121212"
+            status_fg               = "#ffd866"  # oder "#ffffff"
+            status_border           = "#333333"
+            
+            # Scrollbar dark-blue
+            scroll_track            = "#141414"
+            scroll_handle           = "#0b2a4a"
+            scroll_handle_hover     = "#0f3a66"
+        else:
+            header_bg               = "#f0f0f0"
+            header_fg               = "#000000"
+            tree_bg                 = "#ffffff"
+            tree_fg                 = "#000000"
+            sel_bg                  = "#cfe3ff"
+            sel_fg                  = "#000000"
+            border                  = "#d0d0d0"
+            
+            tab_bg                  = "#f4f4f4"
+            tab_bar_bg              = "#ededed"
+            tab_fg                  = "#000000"
+            tab_fg_active           = "#000000"
+            tab_sel_bg              = "#ffffff"
+            tab_hover_bg            = "#f9f9f9"
+            
+            toolbar_bg              = "#f2f2f2"
+            toolbtn_bg              = "#e9e9e9"
+            toolbtn_fg              = "#000000"
+            toolbtn_hover           = "#dedede"
+            toolbtn_pressed         = "#d2d2d2"
+            
+            title_bg                = "#eaeaea"
+            title_fg                = "#000000"
+            title_btn_bg            = "#f3f3f3"
+            title_btn_hover         = "#dedede"
+            title_btn_close_hover   = "#e06c75"
+            
+            status_bg               = "#ededed"
+            status_fg               = "#000000"
+            status_border           = "#d0d0d0"
+            
+            # Scrollbar light-gray
+            scroll_track            = "#f2f2f2"
+            scroll_handle           = "#c8c8c8"
+            scroll_handle_hover     = "#b0b0b0"
+        
+        self.setStyleSheet(f"""
+QToolBar {{spacing: 8px;background: {toolbar_bg};border: none;}}
+QToolBar::separator {{background: {border};width: 1px;margin: 6px 8px;}}
+QLineEdit {{padding: 6px 10px;border-radius: 10px;border: 1px solid {border};background: {tab_bg};color: {tab_fg};}}
+QLabel {{color: {tab_fg};}}
+QToolButton {{background: {toolbtn_bg};color: {toolbtn_fg};border: 1px solid {border};border-radius: 10px;padding: 6px 10px;}}
+QToolButton:hover {{background: {toolbtn_hover};}}
+QToolButton:pressed {{background: {toolbtn_pressed};}}
+QTabWidget::pane {{border: 1px solid {border};top: -1px;background: {tab_bg};}}
+QTabBar {{background: {tab_bar_bg};}}
+QTabBar::tab {{background: {tab_bar_bg};color: {tab_fg};border: 1px solid {border};border-bottom: none;padding: 7px 14px;margin-right: 6px;border-top-left-radius: 12px;border-top-right-radius: 12px;min-width: 90px;}}
+QTabBar::tab:hover {{background: {tab_hover_bg};}}
+QTabBar::tab:selected {{background: {tab_sel_bg};color: {tab_fg_active};}}
+QTreeView {{border: none;background: {tree_bg};color: {tree_fg};}}
+QTreeView::item:selected {{background: {sel_bg};color: {sel_fg};}}
+QHeaderView::section {{background: {header_bg};color: {header_fg};padding: 6px;border: none;border-bottom: 1px solid {border};}}
+QPushButton {{background: {toolbtn_bg};color: {toolbtn_fg};border: 1px solid {border};border-radius: 10px;padding: 7px 12px;}}
+QPushButton:hover {{background: {toolbtn_hover};}}
+QPushButton:pressed {{background: {toolbtn_pressed};}}
+/* Scrollbars (TreeView etc.) */
+QScrollBar:vertical {{background: {scroll_track};width: 12px;margin: 0px;border: none;border-radius: 6px;}}
+QScrollBar::handle:vertical {{background: {scroll_handle};min-height: 28px;border-radius: 6px;}}
+QScrollBar::handle:vertical:hover {{background: {scroll_handle_hover};}}
+QScrollBar::add-line:vertical,QScrollBar::sub-line:vertical {{height: 0px;}}
+QScrollBar::add-page:vertical,QScrollBar::sub-page:vertical {{background: transparent;}}
+QScrollBar:horizontal {{background: {scroll_track};height: 12px;margin: 0px;border: none;border-radius: 6px;}}
+QScrollBar::handle:horizontal {{background: {scroll_handle};min-width: 28px;border-radius: 6px;}}
+QScrollBar::handle:horizontal:hover {{background: {scroll_handle_hover};}}
+QScrollBar::add-line:horizontal,QScrollBar::sub-line:horizontal {{width: 0px;}}
+QScrollBar::add-page:horizontal,QScrollBar::sub-page:horizontal {{background: transparent;}}
+/* Custom Title Bar */
+#TopContainer {{ background: transparent; }}
+#TitleBar {{background: {title_bg};}}
+#TitleLabel {{color: {title_fg};font-weight: 600;}}
+#TitleSeparator {{background: {border};}}
+QPushButton#TitleBtnMin,QPushButton#TitleBtnMax,QPushButton#TitleBtnClose {{background: {title_btn_bg};color: {title_fg};border: 1px solid {border};border-radius: 10px;}}
+QPushButton#TitleBtnMin:hover,QPushButton#TitleBtnMax:hover {{background: {title_btn_hover};}}
+QPushButton#TitleBtnClose:hover {{background: {title_btn_close_hover};}}
+QStatusBar {{background: {status_bg};color: {status_fg};border-top: 1px solid {status_border};}}
+QStatusBar QLabel {{color: {status_fg};}}
+/* Tab scrollers (left/right arrows) */
+QTabBar::scroller {{width: 22px;height: 22px;background: {tab_bar_bg};border: 1px solid {border};border-radius: 10px;margin: 2px;}}
+QTabBar::scroller:hover {{background: {tab_hover_bg};}}
+/* Arrow icons color via "color" + qproperty (works in many styles) */
+QTabBar QToolButton {{background: {tab_bar_bg};border: 1px solid {border};border-radius: 10px;padding: 2px;color: {tab_fg_active};}}
+QTabBar QToolButton:hover {{background: {tab_hover_bg};}}
+QTabBar QToolButton:pressed {{background: {tab_sel_bg};}}
+QSplitter {{background: {tree_bg};}}
+QSplitter::handle {{background: {border};}}
+QWebEngineView {{background: {tree_bg};}}""")
 
         if self.dark_mode:
-            header_bg = "#222222"
-            header_fg = "#ffd866"
-            tree_bg = "#181818"
-            tree_fg = "#ffffff"
-            sel_bg = "#2b4c7e"
-            sel_fg = "#ffffff"
-            border = "#333333"
-
-            tab_bg = "#1c1c1c"
-            tab_bar_bg = "#161616"
-            tab_fg = "#eaeaea"
-            tab_fg_active = "#ffd866"
-            tab_sel_bg = "#242424"
-            tab_hover_bg = "#202020"
-
-            toolbar_bg = "#1a1a1a"
-            toolbtn_bg = "#222222"
-            toolbtn_fg = "#ffd866"
-            toolbtn_hover = "#2a2a2a"
-            toolbtn_pressed = "#303030"
-            
-            title_bg = "#121212"          # Hintergrund Titelleiste
-            title_fg = "#ffd866"          # Text/Farbe Buttons (oder "#ffffff")
-            title_btn_bg = "#1f1f1f"      # Buttons normal
-            title_btn_hover = "#2a2a2a"   # Buttons hover
-            title_btn_close_hover = "#8a1f1f"  # Close hover
-            
-            status_bg = "#121212"
-            status_fg = "#ffd866"   # oder "#ffffff"
-            status_border = "#333333"
-
-            # Scrollbar dark-blue
-            scroll_track = "#141414"
-            scroll_handle = "#0b2a4a"
-            scroll_handle_hover = "#0f3a66"
+            self.web.setStyleSheet("background: #141414;")
         else:
-            header_bg = "#f0f0f0"
-            header_fg = "#000000"
-            tree_bg = "#ffffff"
-            tree_fg = "#000000"
-            sel_bg = "#cfe3ff"
-            sel_fg = "#000000"
-            border = "#d0d0d0"
-
-            tab_bg = "#f4f4f4"
-            tab_bar_bg = "#ededed"
-            tab_fg = "#000000"
-            tab_fg_active = "#000000"
-            tab_sel_bg = "#ffffff"
-            tab_hover_bg = "#f9f9f9"
-
-            toolbar_bg = "#f2f2f2"
-            toolbtn_bg = "#e9e9e9"
-            toolbtn_fg = "#000000"
-            toolbtn_hover = "#dedede"
-            toolbtn_pressed = "#d2d2d2"
-            
-            title_bg = "#eaeaea"
-            title_fg = "#000000"
-            title_btn_bg = "#f3f3f3"
-            title_btn_hover = "#dedede"
-            title_btn_close_hover = "#e06c75"
-            
-            status_bg = "#ededed"
-            status_fg = "#000000"
-            status_border = "#d0d0d0"
-
-            # Scrollbar light-gray
-            scroll_track = "#f2f2f2"
-            scroll_handle = "#c8c8c8"
-            scroll_handle_hover = "#b0b0b0"
-
-        self.setStyleSheet(f"""
-            QToolBar {{
-                spacing: 8px;
-                background: {toolbar_bg};
-                border: none;
-            }}
-            QToolBar::separator {{
-                background: {border};
-                width: 1px;
-                margin: 6px 8px;
-            }}
-
-            QLineEdit {{
-                padding: 6px 10px;
-                border-radius: 10px;
-                border: 1px solid {border};
-                background: {tab_bg};
-                color: {tab_fg};
-            }}
-            QLabel {{
-                color: {tab_fg};
-            }}
-
-            QToolButton {{
-                background: {toolbtn_bg};
-                color: {toolbtn_fg};
-                border: 1px solid {border};
-                border-radius: 10px;
-                padding: 6px 10px;
-            }}
-            QToolButton:hover {{
-                background: {toolbtn_hover};
-            }}
-            QToolButton:pressed {{
-                background: {toolbtn_pressed};
-            }}
-
-            QTabWidget::pane {{
-                border: 1px solid {border};
-                top: -1px;
-                background: {tab_bg};
-            }}
-            QTabBar {{
-                background: {tab_bar_bg};
-            }}
-            QTabBar::tab {{
-                background: {tab_bar_bg};
-                color: {tab_fg};
-                border: 1px solid {border};
-                border-bottom: none;
-                padding: 7px 14px;
-                margin-right: 6px;
-                border-top-left-radius: 12px;
-                border-top-right-radius: 12px;
-                min-width: 90px;
-            }}
-            QTabBar::tab:hover {{
-                background: {tab_hover_bg};
-            }}
-            QTabBar::tab:selected {{
-                background: {tab_sel_bg};
-                color: {tab_fg_active};
-            }}
-
-            QTreeView {{
-                border: none;
-                background: {tree_bg};
-                color: {tree_fg};
-            }}
-            QTreeView::item:selected {{
-                background: {sel_bg};
-                color: {sel_fg};
-            }}
-
-            QHeaderView::section {{
-                background: {header_bg};
-                color: {header_fg};
-                padding: 6px;
-                border: none;
-                border-bottom: 1px solid {border};
-            }}
-
-            QPushButton {{
-                background: {toolbtn_bg};
-                color: {toolbtn_fg};
-                border: 1px solid {border};
-                border-radius: 10px;
-                padding: 7px 12px;
-            }}
-            QPushButton:hover {{
-                background: {toolbtn_hover};
-            }}
-            QPushButton:pressed {{
-                background: {toolbtn_pressed};
-            }}
-
-            /* Scrollbars (TreeView etc.) */
-            QScrollBar:vertical {{
-                background: {scroll_track};
-                width: 12px;
-                margin: 0px;
-                border: none;
-                border-radius: 6px;
-            }}
-            QScrollBar::handle:vertical {{
-                background: {scroll_handle};
-                min-height: 28px;
-                border-radius: 6px;
-            }}
-            QScrollBar::handle:vertical:hover {{
-                background: {scroll_handle_hover};
-            }}
-            QScrollBar::add-line:vertical,
-            QScrollBar::sub-line:vertical {{
-                height: 0px;
-            }}
-            QScrollBar::add-page:vertical,
-            QScrollBar::sub-page:vertical {{
-                background: transparent;
-            }}
-
-            QScrollBar:horizontal {{
-                background: {scroll_track};
-                height: 12px;
-                margin: 0px;
-                border: none;
-                border-radius: 6px;
-            }}
-            QScrollBar::handle:horizontal {{
-                background: {scroll_handle};
-                min-width: 28px;
-                border-radius: 6px;
-            }}
-            QScrollBar::handle:horizontal:hover {{
-                background: {scroll_handle_hover};
-            }}
-            QScrollBar::add-line:horizontal,
-            QScrollBar::sub-line:horizontal {{
-                width: 0px;
-            }}
-            QScrollBar::add-page:horizontal,
-            QScrollBar::sub-page:horizontal {{
-                background: transparent;
-            }}
-            /* Custom Title Bar */
-            #TopContainer {{ background: transparent; }}
-
-            #TitleBar {{
-                background: {title_bg};
-            }}
-            #TitleLabel {{
-                color: {title_fg};
-                font-weight: 600;
-            }}
-
-            #TitleSeparator {{
-                background: {border};
-            }}
-
-            QPushButton#TitleBtnMin,
-            QPushButton#TitleBtnMax,
-            QPushButton#TitleBtnClose {{
-                background: {title_btn_bg};
-                color: {title_fg};
-                border: 1px solid {border};
-                border-radius: 10px;
-            }}
-
-            QPushButton#TitleBtnMin:hover,
-            QPushButton#TitleBtnMax:hover {{
-                background: {title_btn_hover};
-            }}
-
-            QPushButton#TitleBtnClose:hover {{
-                background: {title_btn_close_hover};
-            }}
-            QStatusBar {{
-                background: {status_bg};
-                color: {status_fg};
-                border-top: 1px solid {status_border};
-            }}
-            QStatusBar QLabel {{
-                color: {status_fg};
-            }}
-        """)
+            self.web.setStyleSheet("background: white;")
 
     def _inject_web_css(self):
         if self.dark_mode:
             js = """
-                (function(){
-                    const id='__qt_dark_css__';
-                    let s=document.getElementById(id);
-                    if(!s){
-                      s=document.createElement('style');
-                      s.id=id;
-                      s.innerHTML=`
-                        html, body { background:#141414 !important; color:#eaeaea !important; }
-                        a { color:#8ab4ff !important; }
-                        pre, code { background:#1e1e1e !important; }
-                      `;
-                      document.head.appendChild(s);
-                    }
-                })();
-            """
+(function(){const id='__qt_dark_css__';let s=document.getElementById(id);if(!s){s=document.createElement('style');
+s.id=id;s.innerHTML=`html, body { background:#141414 !important;color:#eaeaea !important;}
+a { color:#8ab4ff !important;}pre, code { background:#1e1e1e !important;}
+`;document.head.appendChild(s);}})();"""
         else:
-            js = """
-                (function(){
-                    const s=document.getElementById('__qt_dark_css__');
-                    if(s) s.remove();
-                })();
-            """
+            js = """(function(){const s=document.getElementById('__qt_dark_css__');if(s) s.remove();})();"""
         self.web.page().runJavaScript(js)
 
     def _on_url_changed(self, url: QUrl):
