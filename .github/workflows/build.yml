@@ -11,7 +11,7 @@ permissions:
 
 env:
   APP_NAME: PyCHMview
-  ENTRY_SCRIPT: pyview.py
+  ENTRY_SCRIPT: src/pyview.py
   DIST_DIR: dist
 
 jobs:
